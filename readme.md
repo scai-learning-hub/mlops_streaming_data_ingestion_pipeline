@@ -61,7 +61,8 @@ PROJECT STRUCTURE
 └── scripts
 ├── ingestor_a.py
 ├── ingestor_b.py
-└── validator_router.py
+├── schema_orders.py
+└── validator_consumer.py
 
 STEP 0 — CLEAN START (VERY IMPORTANT)
 
@@ -78,193 +79,69 @@ Why:
 
 Clears old messages
 
-Resets consumer offsets
+KAFKA INGESTION LAB — Quick Reference
 
-Avoids demo confusion
+Purpose
+- Demo a simple ingestion quality gate: raw → validate → good/bad.
 
-STEP 1 — OPEN REDPANDA CONSOLE
+Quick start
+- Prereqs: Docker Desktop (running), Python 3.10+, PowerShell/CMD.
+- Reset infra and start:
 
-Open browser:
+```powershell
+cd /d E:\mlops-ingestion-lab
+docker compose down -v
+docker compose up -d
+```
 
-http://localhost:8080
+Create topics (recommended: inside the Kafka container)
 
-Check:
-
-UI loads
-
-Cluster is visible
-
-STEP 2 — CREATE TOPICS
-
-OPTION A: Using UI
-Redpanda Console → Topics → Create Topic
-
-Create:
-
-orders_raw
-
-orders_good
-
-orders_bad
-
-OPTION B: Using Kafka CLI (inside container)
-
+```bash
 docker exec -it kafka bash
 kafka-topics --bootstrap-server kafka:9092 --create --topic orders_raw --partitions 1 --replication-factor 1
 kafka-topics --bootstrap-server kafka:9092 --create --topic orders_good --partitions 1 --replication-factor 1
 kafka-topics --bootstrap-server kafka:9092 --create --topic orders_bad --partitions 1 --replication-factor 1
 exit
+```
 
-STEP 3 — PRODUCE RAW EVENTS
+Note: example producers in `scripts/` use `BOOTSTRAP = "localhost:29092"` (host access). If running producers inside the container, use `kafka:9092`.
 
-Open terminal:
+Run producers
 
-cd /d E:\mlops-ingestion-lab
+```powershell
 python scripts\ingestor_a.py
 python scripts\ingestor_b.py
+```
 
-What happens:
+Run validator
 
-Sends valid + invalid events
+```powershell
+python scripts\validator_consumer.py
+```
 
-Publishes everything to orders_raw
+Topics
+- `orders_raw` — incoming events
+- `orders_good` — validated events
+- `orders_bad` — quarantined events
 
-Verify:
-Redpanda Console → Topics → orders_raw → Messages
+Files
+- `scripts/ingestor_a.py` — produces mostly valid events
+- `scripts/ingestor_b.py` — produces invalid/dirty events
+- `scripts/schema_orders.py` — Pandera schema
+- `scripts/validator_consumer.py` — validator/producer router
 
-STEP 4 — START VALIDATOR (PANDERA)
+Troubleshooting
+- If good/bad remain empty: ensure `validator_consumer.py` is running and try resetting infra:
 
-Open NEW terminal:
-
-cd /d E:\mlops-ingestion-lab
-python scripts\validator_router.py
-
-What happens:
-
-Consumes orders_raw
-
-Applies Pandera rules
-
-Routes records:
-valid → orders_good
-invalid → orders_bad
-
-STEP 5 — VERIFY ROUTING IN UI
-
-Check GOOD data:
-Topics → orders_good → Messages
-
-Check BAD data:
-Topics → orders_bad → Messages
-
-STEP 6 — VERIFY CONSUMER HEALTH
-
-Redpanda Console → Consumer Groups
-
-Expected:
-
-validator-group
-
-State: Stable
-
-Lag: 0
-
-This proves pipeline health.
-
-OPTIONAL — KAFKA CLI VERIFICATION
-
-Run ONLY inside Kafka container.
-
-Consume RAW:
-docker exec -it kafka kafka-console-consumer --bootstrap-server kafka:9092 --topic orders_raw --from-beginning --timeout-ms 4000
-
-Consume GOOD:
-docker exec -it kafka kafka-console-consumer --bootstrap-server kafka:9092 --topic orders_good --from-beginning --timeout-ms 4000
-
-Consume BAD:
-docker exec -it kafka kafka-console-consumer --bootstrap-server kafka:9092 --topic orders_bad --from-beginning --timeout-ms 4000
-
-NOTE:
-Do NOT run kafka-console-consumer from Windows host using kafka:9092.
-
-CODE OVERVIEW
-
-ingestor_a.py
-
-Produces mostly valid events
-
-Writes to orders_raw
-
-ingestor_b.py
-
-Produces dirty / invalid events
-
-Writes to orders_raw
-
-validator_router.py
-
-Kafka consumer (group: validator-group)
-
-Uses Pandera schema
-
-Routes records to good / bad topics
-
-Commits offsets
-
-PANDERA VALIDATION
-
-Pandera enforces:
-
-Required fields
-
-Data types
-
-Value constraints (amount > 0)
-
-Allowed values (country set)
-
-Custom business rules
-
-IMPORTANT:
-Kafka / Redpanda broker does NOT validate payloads.
-Validation happens in consumer / processing layer.
-
-REDPANDA CONSOLE — WHAT EACH TAB IS FOR
-
-Overview : Cluster health
-Topics : Data flow proof
-Messages : Inspect payloads
-Consumer Groups : Pipeline health + lag
-Schema Registry : Schema versioning (optional)
-Connect : Data pipelines
-Security : RBAC / ACLs (Admin API needed)
-
-TROUBLESHOOTING
-
-Problem: Raw has data but good/bad is empty
-Cause:
-
-Validator not running
-
-Offsets already committed
-
-Wrong topic/broker
-
-Fix:
+```powershell
 docker compose down -v
 docker compose up -d
-Then rerun producers + validator.
+```
 
-FINAL DEMO STORY (ONE-LINERS)
+Optional verification (inside container):
 
-Raw data is never trusted
+```bash
+docker exec -it kafka kafka-console-consumer --bootstrap-server kafka:9092 --topic orders_raw --from-beginning --timeout-ms 4000
+```
 
-Schema + quality checks happen in processing layer
-
-Clean data moves forward
-
-Bad data is quarantined
-
-Consumer lag proves pipeline health
-
-END OF FILE
+That's it — concise and focused. Update `requirements.txt` if you want me to add `kafka-python`, `pandas`, and `pandera`.
